@@ -24,7 +24,7 @@
 - [~] 阶段二 回答可信度（§3）—— 已完成：阈值拒答(§3.2)、评测集+run_eval(§3.3)、top_k 对比(§3.4 部分)、相关度展示(§3.1)；可选未做：BM25/reranker、chunk 大小对比、生成端质量评测(§3.5)
 - [ ] 阶段三 资料管理（§4）
 - [~] 阶段四 后端结构与安全（§5）—— 已完成：集中配置 `settings.py`(§5.2)、Key 环境变量优先(§5.3.2)；待补：embedding 单例复用(§5.1)、错误处理细化(§5.4)、轮换泄露 Key(§5.3.1，需用户操作)。注：§5.5 经查证 `deepseek-v4-flash/pro` 即官方当前 V4 ID，原代码无误，保持不变
-- [ ] 阶段五 测试与质量保障（§6）
+- [~] 阶段五 测试与质量保障（§6）—— 已完成：6.1 单测（chunker/doc_store/rag，含阈值标定回归）、6.2 API 测试（TestClient，含拒答路径）；共 29 用例通过。待补：6.4 smoke test（可选）
 
 > 本轮（2026-06-01）落地：`src/settings.py` 集中配置、阈值拒答（默认 0.865 由评测标定）、
 > 前端相关度展示与拒答提示、`eval/` 评测框架（首跑 hit@1=85.7% / hit@3=100% / 拒答准确率=100%）、
@@ -156,14 +156,21 @@ eval/
 
 ## 6. 阶段五：测试与质量保障
 
-> 注意：当前 `.venv` **未安装 pytest / httpx**，做本阶段前需先 `pip install pytest httpx`（已写入 requirements.txt）。
+> pytest 9.0.3 / httpx 0.28.1 已装（在 requirements.txt 内）。测试在仓库根的
+> `tests/` 下，一键 `python -m pytest` 运行（根 `conftest.py` 保证能 import src）。
 
-### 6.1 单元测试
-`chunker` 章节识别/目录清理/长段切分/小 chunk 合并；`doc_store` 增删改；`rag` 无 Key/非法模型/空检索。
+### 6.1 单元测试（已完成）
+- `tests/test_chunker.py`：章节识别 `is_heading`、目录清理 `remove_table_of_contents`、长段切分 `split_long_paragraph`、小 chunk 合并 `merge_small_chunks`（含硬边界/跨文件不合并）。
+- `tests/test_doc_store.py`：用临时 SQLite 库（monkeypatch `connect`）测增删改、版本索引生命周期、sha256 查重、软删除隐藏。
+- `tests/test_rag.py`：`best_distance`/`has_sufficient_evidence`、无 Key、非法模型、空检索；**含阈值标定回归**。
 
-### 6.2 API 测试（用 FastAPI TestClient）
-`/api/health`、`/api/documents`(GET/POST)、`/replace`、`DELETE`、`/api/ask`（含拒答路径）。
-**重点：拒答路径回归测试**——固化 0.865 阈值的标定约束（eval 集里 answerable 能答、irrelevant 被拒），防止以后改资料/参数破坏边界。
+### 6.2 API 测试（已完成，用 FastAPI TestClient）
+`tests/test_api.py`：不进 lifespan（不加载模型），monkeypatch 检索/生成桩。覆盖
+`/api/health`（断言阈值=0.865）、`/api/documents` GET、`/api/ask` 未就绪 503、
+**拒答路径**（距离>阈值→refused 且不触网）、正常生成路径。
+**阈值回归**固化在 `test_rag.py::test_default_threshold_separates_eval_distribution`：
+默认阈值必须落在 eval 边界 [0.862, 0.869) 内，谁改坏立刻报警。
+待补（非必需）：`/api/documents` POST、`/replace`、`DELETE` 走的是 `doc_index` 真实建库链路，需本地模型，暂未纳入快测。
 
 ### 6.3 前端构建检查
 每次重要改动后 `cd frontend && npm run build` 必须通过。

@@ -1,0 +1,106 @@
+"""API 测试：用 FastAPI TestClient，重点覆盖 /api/ask 的拒答路径。
+
+不进入 lifespan（不用 `with TestClient`），因此不加载 embedding 模型；
+检索与生成两个重活通过 monkeypatch 替换成可控桩。
+"""
+
+import pytest
+from fastapi.testclient import TestClient
+
+from src import web
+
+
+@pytest.fixture
+def client():
+    # 不用 with 上下文 → 不触发 lifespan → 不加载模型；state.ready 保持 False
+    return TestClient(web.app)
+
+
+@pytest.fixture
+def ready_state():
+    """把检索器标记为就绪（塞假对象），测完恢复，避免污染其它用例。"""
+    web.state.embedding_model = object()
+    web.state.collection = object()
+    try:
+        yield web.state
+    finally:
+        web.state.embedding_model = None
+        web.state.collection = None
+
+
+def _chunk(distance: float):
+    return {
+        "chunk_id": "chunk_001",
+        "document_id": "doc1",
+        "version_id": "v1",
+        "source": "a.txt",
+        "section_title": "第一章",
+        "char_count": 100,
+        "distance": distance,
+        "text": "示例片段内容",
+    }
+
+
+def test_health_reports_calibrated_threshold(client, monkeypatch):
+    monkeypatch.setattr(web.document_store, "list_documents", lambda: [])
+
+    response = client.get("/api/health")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ok"] is True
+    assert body["ready"] is False  # 测试态未加载模型
+    assert body["similarity_distance_threshold"] == 0.865
+    assert body["document_count"] == 0
+
+
+def test_list_documents(client, monkeypatch):
+    monkeypatch.setattr(
+        web.document_store, "list_documents", lambda: [{"id": "doc1", "title": "标题 A"}]
+    )
+
+    response = client.get("/api/documents")
+
+    assert response.status_code == 200
+    documents = response.json()["documents"]
+    assert documents[0]["id"] == "doc1"
+
+
+def test_ask_returns_503_when_retriever_not_ready(client):
+    response = client.post("/api/ask", json={"question": "随便问问", "api_key": "k"})
+    assert response.status_code == 503
+
+
+def test_ask_refuses_when_evidence_insufficient(client, monkeypatch, ready_state):
+    # 最佳命中距离 1.5 > 阈值 0.865 → 应拒答，且不调用 DeepSeek
+    monkeypatch.setattr(web, "retrieve_chunks", lambda **kwargs: [_chunk(1.5)])
+
+    deepseek_called = {"value": False}
+
+    def _must_not_call(**kwargs):
+        deepseek_called["value"] = True
+        return "不应被调用"
+
+    monkeypatch.setattr(web, "answer_with_deepseek", _must_not_call)
+
+    response = client.post("/api/ask", json={"question": "和资料无关的问题", "api_key": "k"})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["refused"] is True
+    assert body["answer"] == web.INSUFFICIENT_EVIDENCE_MESSAGE
+    assert deepseek_called["value"] is False  # 拒答路径不该触网
+
+
+def test_ask_answers_when_evidence_sufficient(client, monkeypatch, ready_state):
+    # 最佳命中距离 0.5 ≤ 阈值 → 正常生成
+    monkeypatch.setattr(web, "retrieve_chunks", lambda **kwargs: [_chunk(0.5)])
+    monkeypatch.setattr(web, "answer_with_deepseek", lambda **kwargs: "这是基于资料的回答。")
+
+    response = client.post("/api/ask", json={"question": "资料里讲了什么", "api_key": "k"})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["refused"] is False
+    assert body["answer"] == "这是基于资料的回答。"
+    assert body["chunks"][0]["relevance"] > 0  # 距离已转成相关度供前端展示
