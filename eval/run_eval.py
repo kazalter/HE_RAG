@@ -239,7 +239,7 @@ def render_report(summaries: list[dict[str, Any]], with_detail: bool) -> str:
     lines.append("|---|---|---|---|---|---|---|---|")
     for summary in summaries:
         lines.append(
-            f"| {summary['top_k']} | {summary['threshold']:.2f} | "
+            f"| {summary['top_k']} | {summary['threshold']:.3f} | "
             f"{_pct(summary['hit@1'])} | {_pct(summary['hit@3'])} | "
             f"{_pct(summary['section_hit_rate'])} | {_pct(summary['irrelevant_refusal_rate'])} | "
             f"{_pct(summary['answerable_false_refusal_rate'])} | {_pct(summary['refusal_accuracy'])} |"

@@ -66,9 +66,9 @@ DEFAULT_TOP_K = 3
 # 基于归一化向量，Chroma 默认平方 L2 距离与余弦单调相关，范围约 [0, 2]。
 # 最佳命中距离超过该阈值 → 判定“资料中没有足够依据”，拒答而非强行生成。
 # 该默认值由评测集标定（见 PLAN §3.2 与 eval/report.md）：当前样例资料上，
-# 可回答问题的最佳命中距离 ≤0.862，无关问题 ≥0.869，故取 0.9 留少量余量、
-# 不误拒可回答问题。换资料后请重跑 eval/run_eval 重新标定。
-DEFAULT_SIMILARITY_DISTANCE_THRESHOLD = 0.9
+# 可回答问题的最佳命中距离 ≤0.862，无关问题 ≥0.869，故取 0.865 落在两者之间。
+# 换资料后请重跑 eval/run_eval 重新标定。
+DEFAULT_SIMILARITY_DISTANCE_THRESHOLD = 0.865
 
 SUPPORTED_EXTENSIONS = {".docx", ".txt", ".md", ".pdf"}
 

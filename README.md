@@ -135,7 +135,7 @@ python -m eval.run_eval --generate --judge
 | 项 | 环境变量 | 配置键 | 默认 |
 |---|---|---|---|
 | 默认检索条数 | `RAG_TOP_K` | `top_k` | 3 |
-| 拒答距离阈值 | `RAG_SIMILARITY_DISTANCE_THRESHOLD` | `similarity_distance_threshold` | 0.9 |
+| 拒答距离阈值 | `RAG_SIMILARITY_DISTANCE_THRESHOLD` | `similarity_distance_threshold` | 0.865 |
 | 默认生成模型 | `RAG_DEFAULT_LLM_MODEL` | `default_llm_model` | `deepseek-v4-flash` |
 
 ## 安全注意事项
