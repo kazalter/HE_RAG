@@ -135,7 +135,7 @@ def answer_with_deepseek(question, chunks, api_key=None, model=LLM_MODEL):
         {
             "role": "system",
             "content": (
-                "You are a careful thesis QA assistant. Answer in Chinese. "
+                "You are a careful knowledge base QA assistant. Answer in Chinese. "
                 "Only use the provided source chunks. If the sources do not contain "
                 "the answer, say that the material does not mention it. Do not invent facts. "
                 "Use plain text without Markdown formatting."
@@ -144,7 +144,7 @@ def answer_with_deepseek(question, chunks, api_key=None, model=LLM_MODEL):
         {
             "role": "user",
             "content": f"""
-The following chunks were retrieved from the thesis knowledge base:
+The following chunks were retrieved from the knowledge base:
 
 {context}
 

@@ -540,7 +540,7 @@ function formatSize(size) {
           <el-icon><Files /></el-icon>
         </div>
         <div>
-          <h1>论文 RAG</h1>
+          <h1>RAG 知识库</h1>
           <p>{{ documentCount }} 个资料 · {{ status }}</p>
         </div>
       </div>
@@ -603,7 +603,7 @@ function formatSize(size) {
         <div v-if="!messages.length" class="empty-chat">
           <el-icon><ChatLineRound /></el-icon>
           <h3>开始提问</h3>
-          <p>输入论文相关问题后，系统会检索资料 chunk 并生成回答。</p>
+          <p>输入资料相关问题后，系统会检索文档 chunk 并生成回答。</p>
         </div>
 
         <article
@@ -662,7 +662,7 @@ function formatSize(size) {
         <el-input
           v-model="question"
           :autosize="{ minRows: 3, maxRows: 7 }"
-          placeholder="请输入问题，例如：Django 在系统中起到什么作用？"
+          placeholder="请输入问题，例如：这份资料的核心内容是什么？"
           resize="none"
           type="textarea"
           @keydown="handleQuestionKeydown"

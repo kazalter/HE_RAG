@@ -15,7 +15,7 @@ START_WEB_SCRIPT = BASE_DIR / "launcher.py"
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="一键构建论文 RAG 知识库：提取文档、生成 chunks、写入向量库，并可启动 Web。"
+        description="一键构建 RAG 知识库：提取文档、生成 chunks、写入向量库，并可启动 Web。"
     )
     parser.add_argument(
         "--material-dir",

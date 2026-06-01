@@ -57,7 +57,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="论文 RAG 问答 API",
+    title="通用 RAG 知识库问答 API",
     version="1.0.0",
     lifespan=lifespan,
 )
@@ -288,7 +288,7 @@ def index():
         """
         <!doctype html>
         <html lang="zh-CN">
-        <head><meta charset="utf-8"><title>论文 RAG 问答</title></head>
+        <head><meta charset="utf-8"><title>通用 RAG 知识库问答</title></head>
         <body style="font-family: Microsoft YaHei, sans-serif; padding: 32px;">
           <h1>前端还没有构建</h1>
           <p>请先进入 frontend 目录运行：</p>

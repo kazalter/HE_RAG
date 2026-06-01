@@ -1,4 +1,4 @@
-# 论文 RAG 系统 后端依赖
+# 通用 RAG 知识库系统 后端依赖
 # Python 3.12（开发使用 3.12.13）
 # 安装： python -m venv .venv && .venv\Scripts\pip install -r requirements.txt
 #
