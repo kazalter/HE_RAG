@@ -1,0 +1,157 @@
+{
+  "description": "RAG 评测集。当前样例资料为《院系教学信息管理系统》毕业论文。换资料后请同步替换问题。",
+  "schema": {
+    "id": "唯一编号",
+    "question": "用户问题",
+    "type": "fact=单点事实型 / cross=跨章节综合型 / irrelevant=无关型（应拒答）",
+    "expected_sections": "期望命中的章节/内容关键词，任一出现即算命中（在 section_title 或正文中子串匹配）",
+    "expected_keywords": "期望出现在最终回答中的关键词（生成端评测用）",
+    "allow_no_answer": "是否允许无答案（irrelevant 型为 true）"
+  },
+  "questions": [
+    {
+      "id": "fact_01",
+      "question": "本系统采用了什么 Web 开发框架？",
+      "type": "fact",
+      "expected_sections": ["Django", "Python"],
+      "expected_keywords": ["Django"],
+      "allow_no_answer": false
+    },
+    {
+      "id": "fact_02",
+      "question": "系统使用了哪种数据库？",
+      "type": "fact",
+      "expected_sections": ["MySQL", "数据库"],
+      "expected_keywords": ["MySQL"],
+      "allow_no_answer": false
+    },
+    {
+      "id": "fact_03",
+      "question": "系统采用了什么软件架构？",
+      "type": "fact",
+      "expected_sections": ["B/S", "架构"],
+      "expected_keywords": ["B/S", "浏览器"],
+      "allow_no_answer": false
+    },
+    {
+      "id": "fact_04",
+      "question": "系统的用户认证与权限是如何控制的？",
+      "type": "fact",
+      "expected_sections": ["权限", "认证", "班级"],
+      "expected_keywords": ["权限", "认证"],
+      "allow_no_answer": false
+    },
+    {
+      "id": "fact_05",
+      "question": "系统测试采用了哪些方法？",
+      "type": "fact",
+      "expected_sections": ["测试", "用例"],
+      "expected_keywords": ["测试"],
+      "allow_no_answer": false
+    },
+    {
+      "id": "fact_06",
+      "question": "论文的研究背景与意义是什么？",
+      "type": "fact",
+      "expected_sections": ["研究背景", "意义", "绪论"],
+      "expected_keywords": ["背景", "意义"],
+      "allow_no_answer": false
+    },
+    {
+      "id": "fact_07",
+      "question": "系统的核心业务模块包含哪些功能？",
+      "type": "fact",
+      "expected_sections": ["业务模块", "选课", "成绩"],
+      "expected_keywords": ["选课", "成绩"],
+      "allow_no_answer": false
+    },
+    {
+      "id": "fact_08",
+      "question": "自动化运维后台是如何实现的？",
+      "type": "fact",
+      "expected_sections": ["自动化", "运维", "脚本"],
+      "expected_keywords": ["脚本"],
+      "allow_no_answer": false
+    },
+    {
+      "id": "fact_09",
+      "question": "系统的数据库是如何设计的？",
+      "type": "fact",
+      "expected_sections": ["数据库设计"],
+      "expected_keywords": ["数据库", "表"],
+      "allow_no_answer": false
+    },
+    {
+      "id": "fact_10",
+      "question": "系统有哪些非功能性需求？",
+      "type": "fact",
+      "expected_sections": ["非功能", "需求"],
+      "expected_keywords": ["非功能", "性能"],
+      "allow_no_answer": false
+    },
+    {
+      "id": "cross_01",
+      "question": "这个系统的整体技术栈是怎样的？涉及开发语言、框架、数据库和架构。",
+      "type": "cross",
+      "expected_sections": ["Python", "Django", "MySQL", "B/S"],
+      "expected_keywords": ["Python", "Django", "MySQL"],
+      "allow_no_answer": false
+    },
+    {
+      "id": "cross_02",
+      "question": "系统开发从需求分析到测试经历了哪些主要阶段？",
+      "type": "cross",
+      "expected_sections": ["需求分析", "设计", "实现", "测试"],
+      "expected_keywords": ["需求", "测试"],
+      "allow_no_answer": false
+    },
+    {
+      "id": "cross_03",
+      "question": "系统的功能模块设计与详细实现是如何对应的？",
+      "type": "cross",
+      "expected_sections": ["功能模块", "详细设计", "实现"],
+      "expected_keywords": ["模块", "实现"],
+      "allow_no_answer": false
+    },
+    {
+      "id": "cross_04",
+      "question": "论文的工作总结和未来展望提到了什么？",
+      "type": "cross",
+      "expected_sections": ["总结", "展望"],
+      "expected_keywords": ["总结", "展望"],
+      "allow_no_answer": false
+    },
+    {
+      "id": "irrelevant_01",
+      "question": "红烧肉的家常做法是什么？",
+      "type": "irrelevant",
+      "expected_sections": [],
+      "expected_keywords": [],
+      "allow_no_answer": true
+    },
+    {
+      "id": "irrelevant_02",
+      "question": "2008 年北京奥运会的开幕式是哪一天？",
+      "type": "irrelevant",
+      "expected_sections": [],
+      "expected_keywords": [],
+      "allow_no_answer": true
+    },
+    {
+      "id": "irrelevant_03",
+      "question": "如何用 Python 从零训练一个图像分类的卷积神经网络？",
+      "type": "irrelevant",
+      "expected_sections": [],
+      "expected_keywords": [],
+      "allow_no_answer": true
+    },
+    {
+      "id": "irrelevant_04",
+      "question": "推荐几部值得一看的科幻电影。",
+      "type": "irrelevant",
+      "expected_sections": [],
+      "expected_keywords": [],
+      "allow_no_answer": true
+    }
+  ]
+}

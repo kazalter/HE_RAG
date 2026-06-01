@@ -1,0 +1,43 @@
+# ---- Python ----
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# ---- 敏感配置（绝对不能提交）----
+.rag_config.json
+.env
+*.key
+
+# ---- 运行期数据（体积大 / 可重建）----
+data/chroma/
+data/app.db
+data/material/
+data/text/
+data/chunks/
+
+# ---- 前端 ----
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+
+# ---- 评测产物 ----
+eval/report.md
+eval/report_*.md
+eval/*.csv
+
+# ---- 模型权重（体积大，单独分发）----
+models/
+
+# ---- 系统 / 编辑器 ----
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/
+*.log
