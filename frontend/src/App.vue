@@ -1,6 +1,8 @@
 <script setup>
 import { computed, nextTick, onMounted, ref, watch } from "vue";
-import { ElMessage, ElMessageBox } from "element-plus";
+import { toast } from "./lib/toast.js";
+import Toast from "./components/Toast.vue";
+import ConfirmDialog from "./components/ConfirmDialog.vue";
 import Sidebar from "./components/Sidebar.vue";
 import TopBar from "./components/TopBar.vue";
 import ChatMessage from "./components/ChatMessage.vue";
@@ -25,6 +27,25 @@ const mobileOpen = ref(false);
 const kbOpen = ref(false);
 const modelOpen = ref(false);
 const settingsOpen = ref(false);
+
+// ── 自定义确认框（替代 Element Plus 的 ElMessageBox）──
+const confirmState = ref({ open: false, title: "", message: "", confirmText: "确定", cancelText: "取消", danger: false });
+let confirmResolve = null;
+
+function askConfirm(opts) {
+  confirmState.value = { open: true, title: "确认操作", message: "", confirmText: "确定", cancelText: "取消", danger: false, ...opts };
+  return new Promise((resolve) => {
+    confirmResolve = resolve;
+  });
+}
+
+function resolveConfirm(ok) {
+  confirmState.value.open = false;
+  if (confirmResolve) {
+    confirmResolve(ok);
+    confirmResolve = null;
+  }
+}
 
 // ── 数据状态 ──
 const model = ref(localStorage.getItem(MODEL_STORAGE_KEY) || "deepseek-v4-flash");
@@ -171,7 +192,7 @@ async function loadDocuments() {
 }
 async function saveKey(key) {
   if (!key) {
-    ElMessage.warning("请先输入 DeepSeek API Key");
+    toast.warning("请先输入 DeepSeek API Key");
     return;
   }
   try {
@@ -184,9 +205,9 @@ async function saveKey(key) {
     if (!res.ok) throw new Error(data.detail || "保存失败");
     apiKeySaved.value = true;
     settingsOpen.value = false;
-    ElMessage.success("Key 已保存");
+    toast.success("Key 已保存");
   } catch (error) {
-    ElMessage.error(error.message);
+    toast.error(error.message);
   }
 }
 
@@ -214,10 +235,10 @@ async function uploadDocument(file) {
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.detail || "上传失败");
-    ElMessage.success(`已上传并索引，生成 ${data.chunk_count || 0} 个片段`);
+    toast.success(`已上传并索引，生成 ${data.chunk_count || 0} 个片段`);
     await loadDocuments();
   } catch (error) {
-    ElMessage.error(error.message);
+    toast.error(error.message);
   } finally {
     busy.value = false;
   }
@@ -235,34 +256,32 @@ async function replaceDocument({ id, file }) {
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.detail || "替换失败");
-    ElMessage.success("替换完成，旧向量已删除");
+    toast.success("替换完成，旧向量已删除");
     await loadDocuments();
   } catch (error) {
-    ElMessage.error(error.message);
+    toast.error(error.message);
   } finally {
     busy.value = false;
   }
 }
 
 async function deleteDocument(doc) {
-  try {
-    await ElMessageBox.confirm(`确定删除「${doc.title || doc.original_filename}」吗？对应向量会一起删除。`, "删除资料", {
-      confirmButtonText: "删除",
-      cancelButtonText: "取消",
-      type: "warning",
-    });
-  } catch {
-    return;
-  }
+  const ok = await askConfirm({
+    title: "删除资料",
+    message: `确定删除「${doc.title || doc.original_filename}」吗？对应向量会一起删除。`,
+    confirmText: "删除",
+    danger: true,
+  });
+  if (!ok) return;
   busy.value = true;
   try {
     const res = await fetch(`/api/documents/${doc.id}`, { method: "DELETE" });
     const data = await res.json();
     if (!res.ok) throw new Error(data.detail || "删除失败");
-    ElMessage.success("资料已删除");
+    toast.success("资料已删除");
     await loadDocuments();
   } catch (error) {
-    ElMessage.error(error.message);
+    toast.error(error.message);
   } finally {
     busy.value = false;
   }
@@ -298,7 +317,7 @@ function chunkToSource(chunk, index) {
 async function send(text) {
   if (busy.value) return;
   if (!apiKeySaved.value) {
-    ElMessage.warning("请先在设置中保存 DeepSeek API Key");
+    toast.warning("请先在设置中保存 DeepSeek API Key");
     settingsOpen.value = true;
     return;
   }
@@ -435,7 +454,7 @@ async function scrollBottom() {
             :key="m.id"
             :msg="m"
             @suggest-upload="kbOpen = true"
-            @suggest-rephrase="ElMessage.info('试着用资料里的关键词重新提问')"
+            @suggest-rephrase="toast.info('试着用资料里的关键词重新提问')"
           />
           <div class="h-2"></div>
         </div>
@@ -470,5 +489,17 @@ async function scrollBottom() {
       @delete="deleteDocument"
       @refresh="loadDocuments"
     />
+
+    <ConfirmDialog
+      :open="confirmState.open"
+      :title="confirmState.title"
+      :message="confirmState.message"
+      :confirm-text="confirmState.confirmText"
+      :cancel-text="confirmState.cancelText"
+      :danger="confirmState.danger"
+      @confirm="resolveConfirm(true)"
+      @cancel="resolveConfirm(false)"
+    />
+    <Toast />
   </div>
 </template>
