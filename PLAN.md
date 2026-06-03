@@ -23,7 +23,7 @@
 - [x] 阶段一 工程基础其余（README、启动说明）（§2）—— 已写 `README.md`
 - [~] 阶段二 回答可信度（§3）—— 已完成：阈值拒答(§3.2)、评测集+run_eval(§3.3)、top_k 对比(§3.4 部分)、相关度展示(§3.1)；可选未做：BM25/reranker、chunk 大小对比、生成端质量评测(§3.5)
 - [ ] 阶段三 资料管理（§4）
-- [~] 阶段四 后端结构与安全（§5）—— 已完成：集中配置 `settings.py`(§5.2)、Key 环境变量优先(§5.3.2)；待补：embedding 单例复用(§5.1)、错误处理细化(§5.4)、轮换泄露 Key(§5.3.1，需用户操作)。注：§5.5 经查证 `deepseek-v4-flash/pro` 即官方当前 V4 ID，原代码无误，保持不变
+- [~] 阶段四 后端结构与安全（§5）—— 已完成：集中配置 `settings.py`(§5.2)、Key 环境变量优先(§5.3.2)、错误处理细化(§5.4)、embedding 单例复用(§5.1)；待补：轮换泄露 Key(§5.3.1，需用户操作)。注：§5.5 经查证 `deepseek-v4-flash/pro` 即官方当前 V4 ID，原代码无误，保持不变
 - [~] 阶段五 测试与质量保障（§6）—— 已完成：6.1 单测（chunker/doc_store/rag，含阈值标定回归）、6.2 API 测试（TestClient，含拒答路径）；共 29 用例通过。待补：6.4 smoke test（可选）
 
 > 本轮（2026-06-01）落地：`src/settings.py` 集中配置、阈值拒答（默认 0.865 由评测标定）、
@@ -132,9 +132,14 @@ eval/
 
 ## 5. 阶段四：优化后端结构与安全
 
-### 5.1 复用 embedding 模型
-当前检索与索引各自加载模型。改为统一 `EmbeddingService` 单例，启动加载一次，索引/检索共用。
-（注意：`web.py` 已用 `state` 持有检索模型，但 `doc_index.index_version` 仍单独 `load_embedding_model`，需打通。）
+### 5.1 复用 embedding 模型（已完成）
+新增 `src/embedding.py`：进程级线程安全懒加载单例 `get_embedding_model()`。
+`rag.load_embedding_model` 委托给它（Web 启动 `load_retriever` 加载的即此单例），
+`doc_index.index_version` 改用同一单例——上传/替换建索引时不再加载第二份模型。
+顺带把 `rag.py` 顶部对 `sentence_transformers` 的导入移除（改为延迟加载），
+`import rag` 不再拉起 torch，测试收集由 ~31s 降到 ~1.5s。
+回归：`tests/test_embedding.py`（只加载一次 / reset 重载 / rag 委托）。
+（chunker 批处理流水线与 query_db 调试脚本是独立进程，二次加载无影响，保持不变。）
 
 ### 5.2 集中配置 `src/settings.py`（已完成）
 模型名、Chroma 路径、collection、本地模型路径、默认 LLM、默认 top_k、相似度阈值统一在 `settings.py`。
@@ -146,8 +151,11 @@ eval/
 3. **先写好 `.gitignore`（含 `.rag_config.json`）再执行 `git init`**，否则首次提交会把 Key 带进历史。（.gitignore 已就绪）
 4. README 写明安全注意事项；后续可选系统 keyring。
 
-### 5.4 错误处理
-用户侧错误（类型不支持/缺 Key/资料为空/依据不足）给中文友好提示；系统侧错误（模型加载/Chroma/DeepSeek 调用失败）记详细日志。
+### 5.4 错误处理（已完成）
+用户侧错误（类型不支持/解码失败/缺 Key/资料为空/模型不支持）返回**中文友好 detail**（前端直接弹给用户）；系统侧错误（检索/Chroma、DeepSeek 网络调用失败）用 `logger.exception` 记全栈到服务端日志，前端只回兜底中文，不外泄原始错误。
+- `rag.py` / `doc_index.py`：底层报错文案中文化；base64 解码失败 → `ValueError`；不支持类型校验前置到建记录之前，避免孤儿文档。
+- `web.py`：`/api/ask` 拆分检索/生成两段错误处理（检索失败 500、Key/模型类 400、DeepSeek 失败 502）；上传/替换/删除区分 400/404/500 并记日志。
+- 测试：`tests/test_api.py` 覆盖缺 Key/配置错/DeepSeek 失败三条路径；`tests/test_doc_index.py` 覆盖类型校验与解码报错。
 
 ### 5.5 模型名核对（已核对）
 `deepseek-v4-flash`/`deepseek-v4-pro` 即 api.deepseek.com 2026 年官方当前模型 ID，默认用 `deepseek-v4-flash`；`deepseek-chat`/`deepseek-reasoner` 是将于 2026-07-24 弃用的遗留别名（映射到 v4），保留为备选。配置集中在 `src/settings.py`。
@@ -194,8 +202,8 @@ eval/
 - 阶段五基础测试（§6.1 单测 + §6.2 API 测试，含拒答回归）
 - 检索策略对比表整理进 README（§3.4，至少 top_k 一组）
 - 文档版本历史 / 索引状态（§4.1、§4.2）
-- embedding 模型复用（§5.1）
-- 错误处理细化（§5.4）
+- embedding 模型复用（§5.1，已完成）
+- 错误处理细化（§5.4，已完成）
 
 **P3 进一步提升（视精力）**
 - 混合检索 / reranker（§3.4 可选项）
