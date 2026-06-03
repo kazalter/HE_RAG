@@ -241,6 +241,21 @@ def list_documents() -> dict[str, Any]:
     }
 
 
+@app.get("/api/documents/{document_id}")
+def get_document_detail(document_id: str) -> dict[str, Any]:
+    """文档详情：元数据 + 版本历史（含索引状态/失败原因）+ 当前版本的 chunk 预览。"""
+    document = document_store.get_document(document_id)
+    if document is None or document.get("status") == "deleted":
+        raise HTTPException(status_code=404, detail=DOCUMENT_NOT_FOUND_MSG)
+
+    current_version_id = document.get("current_version_id")
+    return {
+        "document": document,
+        "versions": document_store.list_versions(document_id),
+        "chunks": document_store.list_chunks(current_version_id) if current_version_id else [],
+    }
+
+
 @app.post("/api/documents", response_model=DocumentOperationResponse)
 def create_document(payload: DocumentUploadRequest) -> DocumentOperationResponse:
     try:

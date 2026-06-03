@@ -320,6 +320,38 @@ def insert_chunks(chunks: list[dict[str, Any]]) -> None:
         )
 
 
+def list_versions(document_id: str) -> list[dict[str, Any]]:
+    """返回某文档的全部版本，最新在前（供前端展示版本历史 / 索引状态）。"""
+    with connect() as db:
+        rows = db.execute(
+            """
+            SELECT id, document_id, original_filename, file_ext, file_size,
+                   status, chunk_count, embedding_model, embedding_dim,
+                   parse_error, created_at, indexed_at
+            FROM document_versions
+            WHERE document_id = ?
+            ORDER BY created_at DESC
+            """,
+            (document_id,),
+        ).fetchall()
+        return [row_to_dict(row) for row in rows if row is not None]
+
+
+def list_chunks(version_id: str) -> list[dict[str, Any]]:
+    """返回某版本的全部 chunk（章节标题/字符数/预览），按切块顺序，供文档预览。"""
+    with connect() as db:
+        rows = db.execute(
+            """
+            SELECT chunk_index, section_title, char_count, text_preview, chroma_id
+            FROM document_chunks
+            WHERE version_id = ?
+            ORDER BY chunk_index
+            """,
+            (version_id,),
+        ).fetchall()
+        return [row_to_dict(row) for row in rows if row is not None]
+
+
 def get_chroma_ids_for_version(version_id: str) -> list[str]:
     with connect() as db:
         rows = db.execute(

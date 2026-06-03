@@ -1,5 +1,5 @@
 <script setup>
-import { ref } from "vue";
+import { ref, watch } from "vue";
 import Icon from "./Icon.vue";
 import FileTypeBadge from "./FileTypeBadge.vue";
 
@@ -15,6 +15,50 @@ const dragOver = ref(false);
 const uploadInput = ref(null);
 const replaceInput = ref(null);
 const replaceTarget = ref(null);
+
+// 文档详情（版本历史 / 索引状态 / chunk 预览）
+const detail = ref(null);
+const detailLoading = ref(false);
+const detailError = ref("");
+
+async function openDetail(doc) {
+  detail.value = null;
+  detailError.value = "";
+  detailLoading.value = true;
+  try {
+    const res = await fetch(`/api/documents/${doc.id}`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    detail.value = await res.json();
+  } catch (err) {
+    detailError.value = "加载详情失败，请稍后重试。";
+  } finally {
+    detailLoading.value = false;
+  }
+}
+
+function closeDetail() {
+  detail.value = null;
+  detailError.value = "";
+}
+
+// 抽屉关闭后重置详情，下次打开回到资料清单
+watch(
+  () => props.open,
+  (open) => {
+    if (!open) closeDetail();
+  },
+);
+
+// 版本状态 → 展示样式（已索引 / 处理中 / 失败 / 历史版本）
+function versionStatus(v) {
+  const map = {
+    indexed: { label: "已索引", cls: "text-emerald-600 bg-emerald-50" },
+    pending: { label: "处理中", cls: "text-amber-600 bg-amber-50" },
+    failed: { label: "失败", cls: "text-rose-600 bg-rose-50" },
+    archived: { label: "历史版本", cls: "text-stone-500 bg-stone-100" },
+  };
+  return map[v.status] || { label: v.status || "未知", cls: "text-stone-500 bg-stone-100" };
+}
 
 function extOf(doc) {
   const ext = (doc.file_ext || "").replace(/^\./, "").toLowerCase();
@@ -101,6 +145,8 @@ function onReplacePick(e) {
       </div>
 
       <div class="flex-1 overflow-y-auto sidebar-scroll p-5">
+        <!-- 资料清单视图 -->
+        <template v-if="!detail && !detailLoading && !detailError">
         <!-- 概览 -->
         <div class="grid grid-cols-3 gap-2.5 mb-5">
           <div class="rounded-xl bg-white ring-1 ring-stone-200/70 px-3 py-3 text-center">
@@ -169,17 +215,23 @@ function onReplacePick(e) {
             :key="doc.id"
             class="group flex items-center gap-3 rounded-xl bg-white ring-1 ring-stone-200/70 px-3 py-2.5 hover:ring-stone-300/90 transition-all"
           >
-            <FileTypeBadge :type="extOf(doc)" />
-            <div class="flex-1 min-w-0">
-              <div class="text-[13px] font-medium text-stone-800 truncate">
-                {{ doc.title || doc.original_filename || "未命名资料" }}
+            <button
+              class="flex items-center gap-3 flex-1 min-w-0 text-left"
+              title="查看详情"
+              @click="openDetail(doc)"
+            >
+              <FileTypeBadge :type="extOf(doc)" />
+              <div class="flex-1 min-w-0">
+                <div class="text-[13px] font-medium text-stone-800 truncate group-hover:text-coral-600 transition-colors">
+                  {{ doc.title || doc.original_filename || "未命名资料" }}
+                </div>
+                <div class="flex items-center gap-2 mt-0.5 text-[11px] text-stone-400">
+                  <span>{{ formatSize(doc.file_size) }}</span><span>·</span>
+                  <span>{{ doc.chunk_count || 0 }} 片段</span><span>·</span>
+                  <span>{{ formatDate(doc.indexed_at) }}</span>
+                </div>
               </div>
-              <div class="flex items-center gap-2 mt-0.5 text-[11px] text-stone-400">
-                <span>{{ formatSize(doc.file_size) }}</span><span>·</span>
-                <span>{{ doc.chunk_count || 0 }} 片段</span><span>·</span>
-                <span>{{ formatDate(doc.indexed_at) }}</span>
-              </div>
-            </div>
+            </button>
 
             <span
               v-if="(doc.chunk_count || 0) > 0"
@@ -213,6 +265,84 @@ function onReplacePick(e) {
         </div>
 
         <div v-else class="text-center text-[12.5px] text-stone-400 py-10">还没有登记资料</div>
+        </template>
+
+        <!-- 详情视图：版本历史 / 索引状态 / chunk 预览 -->
+        <template v-else>
+          <button
+            class="flex items-center gap-1.5 text-[12.5px] text-stone-500 hover:text-coral-600 transition-colors mb-4"
+            @click="closeDetail"
+          >
+            <Icon name="x" :size="14" /> 返回清单
+          </button>
+
+          <div v-if="detailLoading" class="text-center text-[12.5px] text-stone-400 py-10">
+            正在加载详情…
+          </div>
+          <div v-else-if="detailError" class="text-center text-[12.5px] text-rose-500 py-10">
+            {{ detailError }}
+          </div>
+
+          <template v-else-if="detail">
+            <!-- 元数据 -->
+            <div class="rounded-xl bg-white ring-1 ring-stone-200/70 px-4 py-3.5 mb-5">
+              <div class="text-[14px] font-semibold text-stone-800 break-all">
+                {{ detail.document.title || (detail.versions[0] && detail.versions[0].original_filename) || "未命名资料" }}
+              </div>
+              <div class="grid grid-cols-2 gap-y-1.5 gap-x-3 mt-3 text-[11.5px]">
+                <div class="text-stone-400">片段数<span class="text-stone-700 ml-1.5 tabular-nums">{{ (detail.chunks || []).length }}</span></div>
+                <div class="text-stone-400">版本数<span class="text-stone-700 ml-1.5 tabular-nums">{{ (detail.versions || []).length }}</span></div>
+                <div class="text-stone-400">向量模型<span class="text-stone-700 ml-1.5">{{ (detail.versions[0] && detail.versions[0].embedding_model) || "—" }}</span></div>
+                <div class="text-stone-400">索引时间<span class="text-stone-700 ml-1.5">{{ formatDate(detail.versions[0] && detail.versions[0].indexed_at) }}</span></div>
+              </div>
+            </div>
+
+            <!-- 版本历史 -->
+            <div class="text-[12.5px] font-medium text-stone-500 mb-2.5">版本历史</div>
+            <div class="space-y-2 mb-5">
+              <div
+                v-for="v in detail.versions"
+                :key="v.id"
+                class="rounded-xl bg-white ring-1 ring-stone-200/70 px-3 py-2.5"
+              >
+                <div class="flex items-center gap-2">
+                  <span class="text-[12.5px] font-medium text-stone-800 truncate flex-1 min-w-0">{{ v.original_filename }}</span>
+                  <span class="shrink-0 px-1.5 py-0.5 rounded text-[10.5px] font-medium" :class="versionStatus(v).cls">
+                    {{ versionStatus(v).label }}
+                  </span>
+                </div>
+                <div class="flex items-center gap-2 mt-1 text-[11px] text-stone-400">
+                  <span>{{ formatSize(v.file_size) }}</span><span>·</span>
+                  <span>{{ v.chunk_count || 0 }} 片段</span><span>·</span>
+                  <span>{{ formatDate(v.created_at) }}</span>
+                </div>
+                <div v-if="v.parse_error" class="mt-1.5 text-[11px] text-rose-500 break-all">
+                  失败原因：{{ v.parse_error }}
+                </div>
+              </div>
+            </div>
+
+            <!-- 切块预览 -->
+            <div class="text-[12.5px] font-medium text-stone-500 mb-2.5">
+              切块预览<span class="text-stone-400 font-normal ml-1">（当前版本 {{ (detail.chunks || []).length }} 段）</span>
+            </div>
+            <div v-if="(detail.chunks || []).length" class="space-y-2">
+              <div
+                v-for="c in detail.chunks"
+                :key="c.chunk_index"
+                class="rounded-xl bg-white ring-1 ring-stone-200/70 px-3 py-2.5"
+              >
+                <div class="flex items-center gap-2 mb-1">
+                  <span class="shrink-0 w-5 h-5 grid place-items-center rounded bg-stone-100 text-[10.5px] text-stone-500 tabular-nums">{{ c.chunk_index }}</span>
+                  <span class="text-[12px] font-medium text-stone-700 truncate flex-1 min-w-0">{{ c.section_title || "（无章节标题）" }}</span>
+                  <span class="shrink-0 text-[10.5px] text-stone-400 tabular-nums">{{ c.char_count || 0 }} 字</span>
+                </div>
+                <div class="text-[11.5px] text-stone-500 leading-relaxed line-clamp-3">{{ c.text_preview }}</div>
+              </div>
+            </div>
+            <div v-else class="text-center text-[12.5px] text-stone-400 py-8">该版本暂无切块记录</div>
+          </template>
+        </template>
       </div>
     </div>
   </div>

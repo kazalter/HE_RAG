@@ -66,6 +66,40 @@ def test_list_documents(client, monkeypatch):
     assert documents[0]["id"] == "doc1"
 
 
+def test_document_detail_returns_versions_and_chunks(client, monkeypatch):
+    monkeypatch.setattr(
+        web.document_store, "get_document",
+        lambda doc_id: {"id": doc_id, "status": "active", "current_version_id": "v1"},
+    )
+    monkeypatch.setattr(
+        web.document_store, "list_versions",
+        lambda doc_id: [{"id": "v1", "status": "indexed", "chunk_count": 2}],
+    )
+    monkeypatch.setattr(
+        web.document_store, "list_chunks",
+        lambda version_id: [{"chunk_index": 1, "section_title": "第一章", "text_preview": "片段"}],
+    )
+
+    response = client.get("/api/documents/doc1")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["document"]["id"] == "doc1"
+    assert body["versions"][0]["id"] == "v1"
+    assert body["chunks"][0]["section_title"] == "第一章"
+
+
+def test_document_detail_404_when_missing_or_deleted(client, monkeypatch):
+    monkeypatch.setattr(web.document_store, "get_document", lambda doc_id: None)
+    assert client.get("/api/documents/nope").status_code == 404
+
+    monkeypatch.setattr(
+        web.document_store, "get_document",
+        lambda doc_id: {"id": doc_id, "status": "deleted", "current_version_id": "v1"},
+    )
+    assert client.get("/api/documents/doc1").status_code == 404
+
+
 def test_ask_returns_503_when_retriever_not_ready(client):
     response = client.post("/api/ask", json={"question": "随便问问", "api_key": "k"})
     assert response.status_code == 503
