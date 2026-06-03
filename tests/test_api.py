@@ -104,3 +104,47 @@ def test_ask_answers_when_evidence_sufficient(client, monkeypatch, ready_state):
     assert body["refused"] is False
     assert body["answer"] == "这是基于资料的回答。"
     assert body["chunks"][0]["relevance"] > 0  # 距离已转成相关度供前端展示
+
+
+# --- §5.4 错误处理：用户侧友好提示 / 系统侧兜底 ---------------------------
+
+def test_ask_missing_key_returns_friendly_chinese(client, monkeypatch, ready_state):
+    # 请求未带 Key 且服务端也没存 Key → 友好中文提示，而非英文
+    monkeypatch.setattr(web.app_config, "get_deepseek_api_key", lambda: "")
+
+    response = client.post("/api/ask", json={"question": "问题", "api_key": ""})
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == web.MISSING_API_KEY_MSG
+
+
+def test_ask_config_error_maps_to_400(client, monkeypatch, ready_state):
+    # answer_with_deepseek 抛 RuntimeError（我方前置校验）→ 400 且透传中文原因
+    monkeypatch.setattr(web, "retrieve_chunks", lambda **kwargs: [_chunk(0.5)])
+
+    def _raise_config_error(**kwargs):
+        raise RuntimeError("不支持的模型：gpt-x")
+
+    monkeypatch.setattr(web, "answer_with_deepseek", _raise_config_error)
+
+    response = client.post("/api/ask", json={"question": "问题", "api_key": "k"})
+
+    assert response.status_code == 400
+    assert "不支持的模型" in response.json()["detail"]
+
+
+def test_ask_deepseek_failure_returns_502_fallback(client, monkeypatch, ready_state):
+    # DeepSeek 网络/API 异常（非我方校验）→ 502 兜底文案，不外泄原始错误
+    monkeypatch.setattr(web, "retrieve_chunks", lambda **kwargs: [_chunk(0.5)])
+
+    def _boom(**kwargs):
+        raise ConnectionError("connection reset by peer")
+
+    monkeypatch.setattr(web, "answer_with_deepseek", _boom)
+
+    response = client.post("/api/ask", json={"question": "问题", "api_key": "k"})
+
+    assert response.status_code == 502
+    detail = response.json()["detail"]
+    assert detail == web.DEEPSEEK_FAILED_MSG
+    assert "connection reset" not in detail  # 原始错误不应外泄给前端

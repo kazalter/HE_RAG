@@ -1,3 +1,4 @@
+import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 from threading import Lock
@@ -24,10 +25,21 @@ from .rag import (
 )
 
 
+logger = logging.getLogger("rag.web")
+
 APP_DIR = Path(__file__).resolve().parent
 FRONTEND_DIST = APP_DIR.parent / "frontend" / "dist"
 ASSETS_DIR = FRONTEND_DIST / "assets"
 TOP_K = settings.DEFAULT_TOP_K
+
+# 用户侧友好提示（前端直接把 detail 弹给用户）。系统侧错误只回兜底文案，
+# 详细堆栈用 logger.exception 记到服务端日志，不外泄给前端。
+RETRIEVER_NOT_READY_MSG = "RAG 检索器还在加载，请稍候重试。"
+MISSING_API_KEY_MSG = "尚未配置 DeepSeek API Key，请在「设置与资料」中填写并保存。"
+RETRIEVE_FAILED_MSG = "检索知识库时出错，请稍后重试。"
+DEEPSEEK_FAILED_MSG = "调用 DeepSeek 生成回答失败，请检查 API Key 是否有效或稍后重试。"
+INDEX_FAILED_MSG = "资料处理失败，请确认文件完整后重试。"
+DOCUMENT_NOT_FOUND_MSG = "资料不存在或已被删除。"
 
 
 class RagState:
@@ -147,40 +159,54 @@ def health() -> dict[str, Any]:
 @app.post("/api/ask", response_model=AskResponse)
 def ask(payload: AskRequest) -> AskResponse:
     if not state.ready:
-        raise HTTPException(status_code=503, detail="RAG 检索器还没有加载完成。")
+        raise HTTPException(status_code=503, detail=RETRIEVER_NOT_READY_MSG)
 
     api_key = payload.api_key.strip() or app_config.get_deepseek_api_key()
     if not api_key:
-        raise HTTPException(status_code=400, detail="DeepSeek API Key has not been saved.")
+        raise HTTPException(status_code=400, detail=MISSING_API_KEY_MSG)
 
+    question = payload.question.strip()
+
+    # 检索：失败属系统侧（Chroma/embedding 出错），记日志、回兜底文案。
     try:
         with state.index_lock:
             chunks = retrieve_chunks(
-                question=payload.question.strip(),
+                question=question,
                 embedding_model=state.embedding_model,
                 collection=state.collection,
                 top_k=payload.top_k,
             )
-        for chunk in chunks:
-            chunk["relevance"] = settings.distance_to_relevance(chunk["distance"])
+    except Exception as error:
+        logger.exception("检索失败：%s", error)
+        raise HTTPException(status_code=500, detail=RETRIEVE_FAILED_MSG) from error
 
-        # 阈值拒答：检索不到足够相关的依据时，直接返回提示，不调用 LLM，降低幻觉。
-        if not has_sufficient_evidence(chunks):
-            return AskResponse(
-                answer=INSUFFICIENT_EVIDENCE_MESSAGE,
-                chunks=chunks,
-                refused=True,
-            )
+    for chunk in chunks:
+        chunk["relevance"] = settings.distance_to_relevance(chunk["distance"])
 
+    # 阈值拒答：检索不到足够相关的依据时，直接返回提示，不调用 LLM，降低幻觉。
+    if not has_sufficient_evidence(chunks):
+        return AskResponse(
+            answer=INSUFFICIENT_EVIDENCE_MESSAGE,
+            chunks=chunks,
+            refused=True,
+        )
+
+    # 生成：RuntimeError/ValueError 是我方前置校验（Key/模型），属用户侧可纠正错误；
+    # 其余异常（DeepSeek 网络/API 失败等）属系统侧，记日志、回兜底文案。
+    try:
         answer = answer_with_deepseek(
-            question=payload.question.strip(),
+            question=question,
             chunks=chunks,
             api_key=api_key,
             model=payload.model,
         )
-        return AskResponse(answer=answer, chunks=chunks, refused=False)
+    except (ValueError, RuntimeError) as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
     except Exception as error:
-        raise HTTPException(status_code=500, detail=str(error)) from error
+        logger.exception("DeepSeek 生成失败：%s", error)
+        raise HTTPException(status_code=502, detail=DEEPSEEK_FAILED_MSG) from error
+
+    return AskResponse(answer=answer, chunks=chunks, refused=False)
 
 
 @app.get("/api/settings")
@@ -234,7 +260,8 @@ def create_document(payload: DocumentUploadRequest) -> DocumentOperationResponse
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
     except Exception as error:
-        raise HTTPException(status_code=500, detail=str(error)) from error
+        logger.exception("资料上传索引失败：%s", error)
+        raise HTTPException(status_code=500, detail=INDEX_FAILED_MSG) from error
 
 
 @app.put("/api/documents/{document_id}/replace", response_model=DocumentOperationResponse)
@@ -254,11 +281,12 @@ def replace_document(document_id: str, payload: DocumentReplaceRequest) -> Docum
             message="Document replaced; old vectors were deleted.",
         )
     except KeyError as error:
-        raise HTTPException(status_code=404, detail=str(error)) from error
+        raise HTTPException(status_code=404, detail=DOCUMENT_NOT_FOUND_MSG) from error
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
     except Exception as error:
-        raise HTTPException(status_code=500, detail=str(error)) from error
+        logger.exception("资料替换失败：%s", error)
+        raise HTTPException(status_code=500, detail=INDEX_FAILED_MSG) from error
 
 
 @app.delete("/api/documents/{document_id}", response_model=DocumentOperationResponse)
@@ -272,9 +300,10 @@ def delete_document(document_id: str) -> DocumentOperationResponse:
             message="Document deleted; current vectors were removed.",
         )
     except KeyError as error:
-        raise HTTPException(status_code=404, detail=str(error)) from error
+        raise HTTPException(status_code=404, detail=DOCUMENT_NOT_FOUND_MSG) from error
     except Exception as error:
-        raise HTTPException(status_code=500, detail=str(error)) from error
+        logger.exception("资料删除失败：%s", error)
+        raise HTTPException(status_code=500, detail="资料删除失败，请稍后重试。") from error
 
 
 @app.get("/", response_class=HTMLResponse)

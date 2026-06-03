@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import binascii
 import hashlib
 import json
 import re
@@ -14,6 +15,7 @@ import chromadb
 
 from . import chunker
 from . import doc_store as document_store
+from . import embedding
 from . import settings
 
 
@@ -39,7 +41,10 @@ def safe_name(name: str) -> str:
 def decode_base64_content(content_base64: str) -> bytes:
     if "," in content_base64 and content_base64.lstrip().startswith("data:"):
         content_base64 = content_base64.split(",", 1)[1]
-    return base64.b64decode(content_base64, validate=True)
+    try:
+        return base64.b64decode(content_base64, validate=True)
+    except (binascii.Error, ValueError) as error:
+        raise ValueError("文件内容解码失败，请重新上传。") from error
 
 
 def sha256_bytes(content: bytes) -> str:
@@ -102,7 +107,7 @@ def cleanup_version_files(version: dict[str, Any]) -> None:
 def build_chunks_for_file(original_filename: str, stored_path: Path) -> tuple[str, list[dict[str, Any]], int]:
     text = chunker.extract_text(stored_path).strip()
     if not text:
-        raise RuntimeError("No text could be extracted from the uploaded file.")
+        raise ValueError("无法从文件中提取到文本，请确认文件内容不为空且未损坏。")
 
     source = chunker.SourceDocument(path=Path(original_filename), text=text)
     chunks, section_count = chunker.build_chunks([source])
@@ -142,7 +147,8 @@ def index_version(
         chunks=chunks,
     )
 
-    model = chunker.load_embedding_model(chunker.DEFAULT_LOCAL_MODEL_PATH)
+    # 复用进程级共享单例：Web 端检索已加载的模型在此直接复用，不再加载第二份。
+    model = embedding.get_embedding_model()
     texts = [chunk["text"] for chunk in chunks]
     embeddings = model.encode(texts, normalize_embeddings=True).tolist()
     embedding_dim = len(embeddings[0]) if embeddings else 0
@@ -202,12 +208,23 @@ def index_version(
     }
 
 
+def validate_extension(clean_filename: str) -> str:
+    file_ext = Path(clean_filename).suffix.lower()
+    if file_ext not in SUPPORTED_EXTENSIONS:
+        allowed = ", ".join(sorted(SUPPORTED_EXTENSIONS))
+        raise ValueError(f"不支持的文件类型：{file_ext or '（无扩展名）'}。仅支持 {allowed}。")
+    return file_ext
+
+
 def create_document_from_bytes(
     *,
     original_filename: str,
     content: bytes,
     title: str | None = None,
 ) -> dict[str, Any]:
+    # 先校验类型，避免不支持的文件留下没有版本的孤儿 document 记录。
+    validate_extension(safe_name(original_filename))
+
     document_id = new_id("doc")
     document_store.create_document(document_id, title or Path(original_filename).stem or original_filename)
     return add_version_from_bytes(
@@ -230,9 +247,7 @@ def add_version_from_bytes(
         raise KeyError(f"Document not found: {document_id}")
 
     clean_filename = safe_name(original_filename)
-    file_ext = Path(clean_filename).suffix.lower()
-    if file_ext not in SUPPORTED_EXTENSIONS:
-        raise ValueError(f"Unsupported file type: {file_ext}")
+    file_ext = validate_extension(clean_filename)
 
     version_id = new_id("ver")
     material_dir, _, _ = ensure_dirs(document_id)

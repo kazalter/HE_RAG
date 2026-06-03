@@ -77,11 +77,11 @@ def test_default_threshold_separates_eval_distribution():
 # --- answer_with_deepseek 入参校验（不触网）-------------------------------
 
 def test_answer_rejects_unknown_model():
-    with pytest.raises(RuntimeError, match="Unsupported model"):
+    with pytest.raises(RuntimeError, match="不支持的模型"):
         rag.answer_with_deepseek("问题", [], api_key="dummy", model="gpt-不存在")
 
 
 def test_answer_requires_api_key(monkeypatch):
     monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
-    with pytest.raises(RuntimeError, match="DEEPSEEK_API_KEY"):
+    with pytest.raises(RuntimeError, match="DeepSeek API Key"):
         rag.answer_with_deepseek("问题", [], api_key="", model="deepseek-v4-flash")

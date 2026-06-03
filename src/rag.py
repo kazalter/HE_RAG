@@ -9,7 +9,6 @@ os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
 
 import chromadb
 from openai import OpenAI
-from sentence_transformers import SentenceTransformer
 
 from . import settings
 
@@ -18,8 +17,6 @@ ROOT_DIR = settings.ROOT_DIR
 DB_PATH = str(settings.CHROMA_PATH)
 COLLECTION_NAME = settings.COLLECTION_NAME
 
-EMBEDDING_MODEL = settings.EMBEDDING_MODEL_NAME
-LOCAL_EMBEDDING_MODEL_PATH = settings.LOCAL_EMBEDDING_MODEL_PATH
 LLM_MODEL = settings.DEFAULT_LLM_MODEL
 AVAILABLE_LLM_MODELS = settings.AVAILABLE_LLM_MODELS
 
@@ -41,18 +38,10 @@ def has_sufficient_evidence(chunks, threshold=None):
 
 
 def load_embedding_model():
-    if LOCAL_EMBEDDING_MODEL_PATH.exists():
-        return SentenceTransformer(str(LOCAL_EMBEDDING_MODEL_PATH))
+    # 委托给进程级单例，使检索与上传建索引共用同一个模型实例（见 embedding.py）。
+    from .embedding import get_embedding_model
 
-    try:
-        return SentenceTransformer(EMBEDDING_MODEL, local_files_only=True)
-    except TypeError:
-        return SentenceTransformer(EMBEDDING_MODEL)
-    except Exception as error:
-        raise RuntimeError(
-            "No local embedding model cache was found. Put BAAI/bge-small-zh-v1.5 "
-            "under models/bge-small-zh-v1.5 or download it first."
-        ) from error
+    return get_embedding_model()
 
 
 def load_retriever():
@@ -120,10 +109,10 @@ def answer_with_deepseek(question, chunks, api_key=None, model=LLM_MODEL):
 
     if model not in AVAILABLE_LLM_MODELS:
         allowed_models = ", ".join(AVAILABLE_LLM_MODELS)
-        raise RuntimeError(f"Unsupported model: {model}. Available models: {allowed_models}")
+        raise RuntimeError(f"不支持的模型：{model}。可用模型：{allowed_models}")
 
     if not api_key:
-        raise RuntimeError("DEEPSEEK_API_KEY was not provided.")
+        raise RuntimeError("未配置 DeepSeek API Key。")
 
     client = OpenAI(
         api_key=api_key,
