@@ -43,7 +43,7 @@
 ## 目录结构
 
 ```
-rag_thesis_demo/
+HE_RAG/
 ├─ src/                 后端
 │  ├─ settings.py       集中配置（路径/模型/top_k/阈值），改一处即可
 │  ├─ config.py         DeepSeek Key 读写（环境变量优先）
