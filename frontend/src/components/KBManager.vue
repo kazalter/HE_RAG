@@ -112,6 +112,32 @@ function onReplacePick(e) {
   replaceTarget.value = null;
   if (file && target) emit("replace", { id: target.id, file });
 }
+
+const rollbackLoading = ref(false);
+
+async function rollbackVersion(docId, verId) {
+  if (props.busy || rollbackLoading.value) return;
+
+  const ok = confirm("确定要将资料回滚到这个历史版本吗？这会清除当前活跃索引并重建该历史版本的向量库。");
+  if (!ok) return;
+
+  rollbackLoading.value = true;
+  try {
+    const res = await fetch(`/api/documents/${docId}/rollback/${verId}`, {
+      method: "POST",
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.message || data.detail || "回滚失败");
+
+    // 重刷详情与列表
+    await openDetail({ id: docId });
+    emit("refresh");
+  } catch (err) {
+    alert(err.message || "回滚失败，请稍后重试。");
+  } finally {
+    rollbackLoading.value = false;
+  }
+}
 </script>
 
 <template>
@@ -318,6 +344,19 @@ function onReplacePick(e) {
                 </div>
                 <div v-if="v.parse_error" class="mt-1.5 text-[11px] text-rose-500 break-all">
                   失败原因：{{ v.parse_error }}
+                </div>
+                <div
+                  v-if="v.id !== detail.document.current_version_id && (v.status === 'archived' || v.status === 'indexed')"
+                  class="mt-2 pt-2 border-t border-stone-100/60 flex items-center justify-between text-[11px]"
+                >
+                  <span class="text-stone-400">历史备份版本</span>
+                  <button
+                    class="font-medium text-coral-500 hover:text-coral-600 transition-colors disabled:opacity-50"
+                    :disabled="busy || rollbackLoading"
+                    @click="rollbackVersion(detail.document.id, v.id)"
+                  >
+                    {{ rollbackLoading ? "正在回滚…" : "回滚至此版本" }}
+                  </button>
                 </div>
               </div>
             </div>

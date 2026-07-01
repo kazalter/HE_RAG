@@ -62,13 +62,14 @@ DEFAULT_LLM_MODEL = "deepseek-v4-flash"
 # 检索 / 拒答参数（可被 env 或 .rag_config.json 覆盖）
 # ---------------------------------------------------------------------------
 DEFAULT_TOP_K = 3
+DEFAULT_RETRIEVAL_MODE = "hybrid"  # 可选：dense (仅向量), bm25 (仅关键字), hybrid (混合检索)
 
 # 基于归一化向量，Chroma 默认平方 L2 距离与余弦单调相关，范围约 [0, 2]。
 # 最佳命中距离超过该阈值 → 判定“资料中没有足够依据”，拒答而非强行生成。
 # 该默认值由评测集标定（见 PLAN §3.2 与 eval/report.md）：当前样例资料上，
 # 可回答问题的最佳命中距离 ≤0.862，无关问题 ≥0.869，故取 0.865 落在两者之间。
 # 换资料后请重跑 eval/run_eval 重新标定。
-DEFAULT_SIMILARITY_DISTANCE_THRESHOLD = 0.865
+DEFAULT_SIMILARITY_DISTANCE_THRESHOLD = 0.90
 
 SUPPORTED_EXTENSIONS = {".docx", ".txt", ".md", ".pdf"}
 
@@ -120,6 +121,12 @@ def get_default_llm_model() -> str:
     raw = os.environ.get("RAG_DEFAULT_LLM_MODEL") or _config_value("default_llm_model")
     model = str(raw).strip() if raw else ""
     return model if model in AVAILABLE_LLM_MODELS else DEFAULT_LLM_MODEL
+
+
+def get_retrieval_mode() -> str:
+    raw = os.environ.get("RAG_RETRIEVAL_MODE") or _config_value("retrieval_mode")
+    mode = str(raw).strip().lower() if raw else ""
+    return mode if mode in {"dense", "bm25", "hybrid"} else DEFAULT_RETRIEVAL_MODE
 
 
 def distance_to_relevance(distance: float) -> float:

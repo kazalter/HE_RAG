@@ -19,9 +19,11 @@ from .rag import (
     INSUFFICIENT_EVIDENCE_MESSAGE,
     LLM_MODEL,
     answer_with_deepseek,
+    answer_with_deepseek_stream,
     has_sufficient_evidence,
     load_retriever,
     retrieve_chunks,
+    rewrite_query,
 )
 
 
@@ -96,6 +98,8 @@ class AskRequest(BaseModel):
     question: str = Field(min_length=1)
     top_k: int = Field(default=TOP_K, ge=1, le=6)
     model: str = Field(default=LLM_MODEL)
+    stream: bool = False
+    history: list[dict[str, str]] = []
 
 
 class ChunkResult(BaseModel):
@@ -156,8 +160,11 @@ def health() -> dict[str, Any]:
     }
 
 
-@app.post("/api/ask", response_model=AskResponse)
-def ask(payload: AskRequest) -> AskResponse:
+@app.post("/api/ask")
+def ask(payload: AskRequest) -> Any:
+    import json
+    from fastapi.responses import StreamingResponse
+
     if not state.ready:
         raise HTTPException(status_code=503, detail=RETRIEVER_NOT_READY_MSG)
 
@@ -167,11 +174,24 @@ def ask(payload: AskRequest) -> AskResponse:
 
     question = payload.question.strip()
 
-    # 检索：失败属系统侧（Chroma/embedding 出错），记日志、回兜底文案。
+    # 多轮对话 Query 改写（指代消解）
+    search_query = question
+    if payload.history:
+        try:
+            search_query = rewrite_query(
+                question=question,
+                history=payload.history,
+                api_key=api_key,
+                model=payload.model,
+            )
+        except Exception as err:
+            logger.warning("Query rewrite error, fallback to original query: %s", err)
+
+    # 检索：使用 search_query 检索
     try:
         with state.index_lock:
             chunks = retrieve_chunks(
-                question=question,
+                question=search_query,
                 embedding_model=state.embedding_model,
                 collection=state.collection,
                 top_k=payload.top_k,
@@ -183,30 +203,81 @@ def ask(payload: AskRequest) -> AskResponse:
     for chunk in chunks:
         chunk["relevance"] = settings.distance_to_relevance(chunk["distance"])
 
-    # 阈值拒答：检索不到足够相关的依据时，直接返回提示，不调用 LLM，降低幻觉。
-    if not has_sufficient_evidence(chunks):
-        return AskResponse(
-            answer=INSUFFICIENT_EVIDENCE_MESSAGE,
-            chunks=chunks,
-            refused=True,
-        )
+    refused = not has_sufficient_evidence(chunks)
 
-    # 生成：RuntimeError/ValueError 是我方前置校验（Key/模型），属用户侧可纠正错误；
-    # 其余异常（DeepSeek 网络/API 失败等）属系统侧，记日志、回兜底文案。
-    try:
-        answer = answer_with_deepseek(
-            question=question,
-            chunks=chunks,
-            api_key=api_key,
-            model=payload.model,
-        )
-    except (ValueError, RuntimeError) as error:
-        raise HTTPException(status_code=400, detail=str(error)) from error
-    except Exception as error:
-        logger.exception("DeepSeek 生成失败：%s", error)
-        raise HTTPException(status_code=502, detail=DEEPSEEK_FAILED_MSG) from error
+    # 格式化 Chunks 满足 Pydantic 类型
+    serialized_chunks = [
+        {
+            "chunk_id": c.get("chunk_id", ""),
+            "document_id": c.get("document_id", ""),
+            "version_id": c.get("version_id", ""),
+            "source": c.get("source", ""),
+            "section_title": c.get("section_title", ""),
+            "char_count": c.get("char_count", 0),
+            "distance": c.get("distance", 0.0),
+            "relevance": c.get("relevance", 0.0),
+            "text": c.get("text", ""),
+        }
+        for c in chunks
+    ]
 
-    return AskResponse(answer=answer, chunks=chunks, refused=False)
+    if not payload.stream:
+        # 阈值拒答：检索不到足够相关的依据时，直接返回提示，不调用 LLM，降低幻觉。
+        if refused:
+            return AskResponse(
+                answer=INSUFFICIENT_EVIDENCE_MESSAGE,
+                chunks=serialized_chunks,
+                refused=True,
+            )
+
+        # 生成：RuntimeError/ValueError 是我方前置校验（Key/模型），属用户侧可纠正错误；
+        # 其余异常（DeepSeek 网络/API 失败等）属系统侧，记日志、回兜底文案。
+        try:
+            answer = answer_with_deepseek(
+                question=search_query,
+                chunks=chunks,
+                api_key=api_key,
+                model=payload.model,
+            )
+        except (ValueError, RuntimeError) as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        except Exception as error:
+            logger.exception("DeepSeek 生成失败：%s", error)
+            raise HTTPException(status_code=502, detail=DEEPSEEK_FAILED_MSG) from error
+
+        return AskResponse(answer=answer, chunks=serialized_chunks, refused=False)
+
+    else:
+        # SSE 流式生成器
+        def event_generator():
+            try:
+                # 1. 立即输出命中文献与拒答状态
+                yield f"data: {json.dumps({'chunks': serialized_chunks, 'refused': refused}, ensure_ascii=False)}\n\n"
+
+                if refused:
+                    yield f"data: {json.dumps({'answer': INSUFFICIENT_EVIDENCE_MESSAGE}, ensure_ascii=False)}\n\n"
+                    yield "data: [DONE]\n\n"
+                    return
+
+                # 2. 流式获取生成内容
+                for token in answer_with_deepseek_stream(
+                    question=search_query,
+                    chunks=chunks,
+                    api_key=api_key,
+                    model=payload.model,
+                ):
+                    yield f"data: {json.dumps({'answer': token}, ensure_ascii=False)}\n\n"
+
+                yield "data: [DONE]\n\n"
+            except (ValueError, RuntimeError) as err:
+                yield f"data: {json.dumps({'error_detail': str(err)}, ensure_ascii=False)}\n\n"
+                yield "data: [DONE]\n\n"
+            except Exception as err:
+                logger.exception("流式响应服务异常: %s", err)
+                yield f"data: {json.dumps({'error_detail': DEEPSEEK_FAILED_MSG}, ensure_ascii=False)}\n\n"
+                yield "data: [DONE]\n\n"
+
+        return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 
 @app.get("/api/settings")
@@ -304,15 +375,36 @@ def replace_document(document_id: str, payload: DocumentReplaceRequest) -> Docum
         raise HTTPException(status_code=500, detail=INDEX_FAILED_MSG) from error
 
 
-@app.delete("/api/documents/{document_id}", response_model=DocumentOperationResponse)
-def delete_document(document_id: str) -> DocumentOperationResponse:
+@app.post("/api/documents/{document_id}/rollback/{version_id}", response_model=DocumentOperationResponse)
+def rollback_document(document_id: str, version_id: str) -> DocumentOperationResponse:
     try:
         with state.index_lock:
-            document_index.delete_document(document_id)
+            document_index.rollback_document_version(document_id, version_id)
         return DocumentOperationResponse(
             ok=True,
             document_id=document_id,
-            message="Document deleted; current vectors were removed.",
+            version_id=version_id,
+            message="Document rolled back successfully.",
+        )
+    except KeyError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    except Exception as error:
+        logger.exception("资料版本回滚失败：%s", error)
+        raise HTTPException(status_code=500, detail="资料回滚失败，请稍后重试。") from error
+
+
+@app.delete("/api/documents/{document_id}", response_model=DocumentOperationResponse)
+def delete_document(document_id: str, remove_files: bool = False) -> DocumentOperationResponse:
+    try:
+        with state.index_lock:
+            document_index.delete_document(document_id, remove_files=remove_files)
+        message = "Document deleted; physical files were removed." if remove_files else "Document deleted; current vectors were removed."
+        return DocumentOperationResponse(
+            ok=True,
+            document_id=document_id,
+            message=message,
         )
     except KeyError as error:
         raise HTTPException(status_code=404, detail=DOCUMENT_NOT_FOUND_MSG) from error

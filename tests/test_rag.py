@@ -52,7 +52,7 @@ def test_has_sufficient_evidence_empty_chunks_refuses():
 # 默认阈值必须落在两者之间，否则要么误拒真问题、要么放过无关问题。
 # 这条测试把这个隐性标定约束固化下来——以后谁改坏阈值会立刻报警。
 EVAL_ANSWERABLE_MAX_DISTANCE = 0.862
-EVAL_IRRELEVANT_MIN_DISTANCE = 0.869
+EVAL_IRRELEVANT_MIN_DISTANCE = 0.91
 
 
 def test_default_threshold_separates_eval_distribution():

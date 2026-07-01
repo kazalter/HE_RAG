@@ -4,6 +4,7 @@
 检索与生成两个重活通过 monkeypatch 替换成可控桩。
 """
 
+import json
 import pytest
 from fastapi.testclient import TestClient
 
@@ -50,7 +51,7 @@ def test_health_reports_calibrated_threshold(client, monkeypatch):
     body = response.json()
     assert body["ok"] is True
     assert body["ready"] is False  # 测试态未加载模型
-    assert body["similarity_distance_threshold"] == 0.865
+    assert body["similarity_distance_threshold"] == 0.90
     assert body["document_count"] == 0
 
 
@@ -182,3 +183,71 @@ def test_ask_deepseek_failure_returns_502_fallback(client, monkeypatch, ready_st
     detail = response.json()["detail"]
     assert detail == web.DEEPSEEK_FAILED_MSG
     assert "connection reset" not in detail  # 原始错误不应外泄给前端
+
+
+def test_ask_streaming_success(client, monkeypatch, ready_state):
+    # 模拟检索命中
+    monkeypatch.setattr(web, "retrieve_chunks", lambda **kwargs: [_chunk(0.5)])
+
+    # 模拟流式生成
+    def _dummy_stream(**kwargs):
+        yield "答案第1字"
+        yield "答案第2字"
+
+    monkeypatch.setattr(web, "answer_with_deepseek_stream", _dummy_stream)
+
+    response = client.post("/api/ask", json={"question": "问题", "api_key": "k", "stream": True})
+
+    assert response.status_code == 200
+    assert "text/event-stream" in response.headers["content-type"]
+
+    # 解析流响应
+    lines = [line for line in response.iter_lines()]
+    non_empty_lines = [line for line in lines if line.strip()]
+
+    # 第1条消息应带 chunks 且 refused=False
+    assert non_empty_lines[0].startswith("data: ")
+    data0 = json.loads(non_empty_lines[0][6:])
+    assert "chunks" in data0
+    assert data0["refused"] is False
+
+    # 第2条和第3条消息是生成字
+    data1 = json.loads(non_empty_lines[1][6:])
+    assert data1["answer"] == "答案第1字"
+
+    data2 = json.loads(non_empty_lines[2][6:])
+    assert data2["answer"] == "答案第2字"
+
+    # 最后一条是 [DONE]
+    assert non_empty_lines[3] == "data: [DONE]"
+
+
+def test_ask_streaming_refuses_when_insufficient(client, monkeypatch, ready_state):
+    monkeypatch.setattr(web, "retrieve_chunks", lambda **kwargs: [_chunk(1.5)])
+
+    stream_called = {"value": False}
+    def _must_not_call(**kwargs):
+        stream_called["value"] = True
+        yield "不该产生"
+
+    monkeypatch.setattr(web, "answer_with_deepseek_stream", _must_not_call)
+
+    response = client.post("/api/ask", json={"question": "问题", "api_key": "k", "stream": True})
+
+    assert response.status_code == 200
+    assert "text/event-stream" in response.headers["content-type"]
+
+    lines = [line for line in response.iter_lines()]
+    non_empty = [line for line in lines if line.strip()]
+
+    # 消息 0 是 chunks 且 refused=True
+    data0 = json.loads(non_empty[0][6:])
+    assert data0["refused"] is True
+
+    # 消息 1 是拒答提示
+    data1 = json.loads(non_empty[1][6:])
+    assert data1["answer"] == web.INSUFFICIENT_EVIDENCE_MESSAGE
+
+    # 消息 2 是 DONE
+    assert non_empty[2] == "data: [DONE]"
+    assert stream_called["value"] is False

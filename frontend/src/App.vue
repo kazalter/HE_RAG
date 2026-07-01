@@ -29,11 +29,32 @@ const modelOpen = ref(false);
 const settingsOpen = ref(false);
 
 // ── 自定义确认框（替代 Element Plus 的 ElMessageBox）──
-const confirmState = ref({ open: false, title: "", message: "", confirmText: "确定", cancelText: "取消", danger: false });
+const confirmState = ref({
+  open: false,
+  title: "",
+  message: "",
+  confirmText: "确定",
+  cancelText: "取消",
+  danger: false,
+  showCheckbox: false,
+  checkboxLabel: "",
+  checked: false,
+});
 let confirmResolve = null;
 
 function askConfirm(opts) {
-  confirmState.value = { open: true, title: "确认操作", message: "", confirmText: "确定", cancelText: "取消", danger: false, ...opts };
+  confirmState.value = {
+    open: true,
+    title: "确认操作",
+    message: "",
+    confirmText: "确定",
+    cancelText: "取消",
+    danger: false,
+    showCheckbox: false,
+    checkboxLabel: "",
+    checked: false,
+    ...opts,
+  };
   return new Promise((resolve) => {
     confirmResolve = resolve;
   });
@@ -271,11 +292,15 @@ async function deleteDocument(doc) {
     message: `确定删除「${doc.title || doc.original_filename}」吗？对应向量会一起删除。`,
     confirmText: "删除",
     danger: true,
+    showCheckbox: true,
+    checkboxLabel: "同时彻底清理磁盘物理源文件及切块",
+    checked: false,
   });
   if (!ok) return;
+  const removeFiles = confirmState.value.checked;
   busy.value = true;
   try {
-    const res = await fetch(`/api/documents/${doc.id}`, { method: "DELETE" });
+    const res = await fetch(`/api/documents/${doc.id}?remove_files=${removeFiles}`, { method: "DELETE" });
     const data = await res.json();
     if (!res.ok) throw new Error(data.detail || "删除失败");
     toast.success("资料已删除");
@@ -337,31 +362,78 @@ async function send(text) {
   scrollBottom();
 
   try {
+    const history = (messages.value || []).slice(0, -1).map((m) => {
+      return {
+        role: m.role === "user" ? "user" : "assistant",
+        content: m.displayText || m.text || "",
+      };
+    }).filter(m => m.content.trim() !== "");
+
     const res = await fetch("/api/ask", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ api_key: "", question: text, top_k: Number(topK.value) || 3, model: model.value }),
+      body: JSON.stringify({
+        api_key: "",
+        question: text,
+        top_k: Number(topK.value) || 3,
+        model: model.value,
+        stream: true,
+        history: history,
+      }),
     });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.detail || "请求失败");
 
-    const fullText = cleanAnswer(data.answer);
-    const sources = (data.chunks || []).map(chunkToSource);
-    const status = data.refused ? "insufficient" : "grounded";
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data.detail || "请求失败");
+    }
 
-    // 渐显（对真实答案做打字机效果）
     ai.phase = "streaming";
     ai.displayText = "";
-    const step = Math.max(2, Math.round(fullText.length / 120));
-    for (let i = 0; i <= fullText.length; i += step) {
-      ai.displayText = fullText.slice(0, i);
-      scrollBottom();
-      await sleep(14);
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder("utf-8");
+    let buffer = "";
+
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() || "";
+
+      for (const line of lines) {
+        const cleanedLine = line.trim();
+        if (!cleanedLine.startsWith("data: ")) continue;
+
+        const rawData = cleanedLine.slice(6).trim();
+        if (rawData === "[DONE]") {
+          ai.phase = "done";
+          continue;
+        }
+
+        try {
+          const parsed = JSON.parse(rawData);
+          if (parsed.error_detail) {
+            throw new Error(parsed.error_detail);
+          }
+          if (parsed.chunks !== undefined) {
+            ai.sources = (parsed.chunks || []).map(chunkToSource);
+            ai.status = parsed.refused ? "insufficient" : "grounded";
+          }
+          if (parsed.answer !== undefined) {
+            ai.displayText += parsed.answer;
+          }
+          scrollBottom();
+        } catch (e) {
+          console.error("Error parsing stream data:", e);
+          if (e.message && e.message.includes("失败")) {
+            throw e;
+          }
+        }
+      }
     }
     ai.phase = "done";
-    ai.displayText = fullText;
-    ai.sources = sources;
-    ai.status = status;
   } catch (error) {
     ai.phase = "done";
     ai.status = "error";
@@ -497,6 +569,9 @@ async function scrollBottom() {
       :confirm-text="confirmState.confirmText"
       :cancel-text="confirmState.cancelText"
       :danger="confirmState.danger"
+      :show-checkbox="confirmState.showCheckbox"
+      :checkbox-label="confirmState.checkboxLabel"
+      v-model:checked="confirmState.checked"
       @confirm="resolveConfirm(true)"
       @cancel="resolveConfirm(false)"
     />

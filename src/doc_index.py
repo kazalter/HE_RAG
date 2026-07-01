@@ -17,6 +17,7 @@ from . import chunker
 from . import doc_store as document_store
 from . import embedding
 from . import settings
+from .bm25_retriever import reset_bm25_retriever
 
 
 APP_DIR = Path(__file__).resolve().parent
@@ -199,6 +200,8 @@ def index_version(
         embedding_dim=embedding_dim,
     )
 
+    reset_bm25_retriever()
+
     return {
         "text_path": text_path,
         "chunks_path": chunks_path,
@@ -206,6 +209,7 @@ def index_version(
         "embedding_dim": embedding_dim,
         "chroma_ids": chroma_ids,
     }
+
 
 
 def validate_extension(clean_filename: str) -> str:
@@ -343,6 +347,8 @@ def delete_document(document_id: str, remove_files: bool = False) -> None:
     document_store.mark_document_deleted(document_id)
     document_store.log_event("document_deleted", "Document marked as deleted", document_id, version_id)
 
+    reset_bm25_retriever()
+
     if remove_files:
         material_path = MATERIAL_DIR / document_id
         text_path = TEXT_DIR / document_id
@@ -422,6 +428,8 @@ def bootstrap_existing_documents() -> None:
         document_store.set_current_version(document_id, version_id)
         document_store.log_event("bootstrap_document", material_path.name, document_id, version_id)
 
+    reset_bm25_retriever()
+
 
 def find_existing_chunk_file(material_path: Path) -> Path | None:
     candidate = CHUNKS_DIR / chunker.output_name("chunks", material_path, ".json")
@@ -435,3 +443,113 @@ def find_existing_text_file(material_path: Path) -> Path | None:
     if candidate.exists():
         return candidate
     return None
+
+
+def rollback_document_version(document_id: str, version_id: str) -> dict[str, Any]:
+    """将文档回滚到某个已经成功提取过的历史版本。"""
+    import json
+
+    # 1. 校验文档是否存在
+    document = document_store.get_document(document_id)
+    if document is None or document.get("status") == "deleted":
+        raise KeyError(f"Document not found: {document_id}")
+
+    # 2. 校验版本是否合法且归属此文档
+    version = document_store.get_version(version_id)
+    if version is None or version.get("document_id") != document_id:
+        raise ValueError(f"Version not found or invalid: {version_id}")
+    if version.get("status") not in {"indexed", "archived"}:
+        raise ValueError(f"Cannot rollback to version with status: {version.get('status')}")
+
+    old_version_id = document.get("current_version_id")
+    if old_version_id == version_id:
+        return {
+            "document_id": document_id,
+            "version_id": version_id,
+            "chunk_count": version.get("chunk_count", 0),
+        }
+
+    # 3. 读取物理切块 JSON
+    chunks_path = Path(settings.ROOT_DIR) / version["chunks_path"]
+    if not chunks_path.exists():
+        raise ValueError("目标版本的物理切块文件不存在，无法回滚。")
+
+    try:
+        chunks_data = json.loads(chunks_path.read_text(encoding="utf-8"))
+    except Exception as err:
+        raise ValueError(f"解析历史切块文件失败: {err}") from err
+
+    # 4. 计算 Embedding 并重建 Chroma 向量
+    model = embedding.get_embedding_model()
+    texts = [chunk["text"] for chunk in chunks_data]
+    embeddings = model.encode(texts, normalize_embeddings=True).tolist()
+    embedding_dim = len(embeddings[0]) if embeddings else 0
+
+    chroma_ids = [f"{version_id}:chunk_{index:03d}" for index in range(1, len(chunks_data) + 1)]
+    metadatas = []
+    db_chunks = []
+    for index, (chunk, chroma_id) in enumerate(zip(chunks_data, chroma_ids), start=1):
+        chunk["chunk_id"] = chroma_id
+        metadatas.append(
+            {
+                "chunk_id": chroma_id,
+                "document_id": document_id,
+                "version_id": version_id,
+                "source": version["original_filename"],
+                "section_title": chunk.get("section_title", ""),
+                "char_count": int(chunk.get("char_count", 0)),
+            }
+        )
+        db_chunks.append(
+            {
+                "id": new_id("chk"),
+                "document_id": document_id,
+                "version_id": version_id,
+                "chroma_id": chroma_id,
+                "chunk_index": index,
+                "section_title": chunk.get("section_title", ""),
+                "char_count": int(chunk.get("char_count", 0)),
+                "text_preview": chunk.get("text", "")[:240],
+            }
+        )
+
+    # 5. 删除老版本的向量，更新数据库版本为 archived
+    if old_version_id:
+        old_ids = document_store.get_chroma_ids_for_version(old_version_id)
+        delete_chroma_ids(old_ids)
+        document_store.delete_chunks_for_version(old_version_id)
+        document_store.archive_version(old_version_id)
+
+    # 6. Chroma 添加新版本向量，写入 Chunks 表，激活目标版本
+    if chroma_ids:
+        collection().add(
+            ids=chroma_ids,
+            documents=texts,
+            metadatas=metadatas,
+            embeddings=embeddings,
+        )
+
+    document_store.insert_chunks(db_chunks)
+    document_store.mark_version_indexed(
+        version_id=version_id,
+        text_path=version["text_path"],
+        chunks_path=version["chunks_path"],
+        chunk_count=len(chunks_data),
+        embedding_model=MODEL_NAME,
+        embedding_dim=embedding_dim,
+    )
+    document_store.set_current_version(document_id, version_id)
+    document_store.log_event(
+        "document_rolled_back",
+        f"Rolled back to version {version_id} ({version['original_filename']})",
+        document_id,
+        version_id,
+    )
+
+    reset_bm25_retriever()
+
+    return {
+        "document_id": document_id,
+        "version_id": version_id,
+        "chunk_count": len(chunks_data),
+    }

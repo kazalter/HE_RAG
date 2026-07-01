@@ -8,8 +8,11 @@ defineProps({
   confirmText: { type: String, default: "确定" },
   cancelText: { type: String, default: "取消" },
   danger: { type: Boolean, default: false },
+  showCheckbox: { type: Boolean, default: false },
+  checkboxLabel: { type: String, default: "" },
+  checked: { type: Boolean, default: false },
 });
-const emit = defineEmits(["confirm", "cancel"]);
+const emit = defineEmits(["confirm", "cancel", "update:checked"]);
 </script>
 
 <template>
@@ -26,6 +29,20 @@ const emit = defineEmits(["confirm", "cancel"]);
         <div class="flex-1 min-w-0 pt-0.5">
           <div class="text-[14.5px] font-semibold text-stone-800">{{ title }}</div>
           <p class="text-[12.5px] text-stone-500 leading-relaxed mt-1.5 break-words">{{ message }}</p>
+          
+          <!-- 可选的复选框 -->
+          <div v-if="showCheckbox" class="mt-3 flex items-center gap-2">
+            <input
+              id="confirm-dialog-checkbox"
+              type="checkbox"
+              :checked="checked"
+              @change="emit('update:checked', $event.target.checked)"
+              class="w-4 h-4 rounded text-coral-500 border-stone-300 focus:ring-coral-400 cursor-pointer"
+            />
+            <label for="confirm-dialog-checkbox" class="text-[12px] text-stone-600 select-none cursor-pointer">
+              {{ checkboxLabel }}
+            </label>
+          </div>
         </div>
       </div>
 

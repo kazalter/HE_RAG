@@ -163,14 +163,15 @@ def evaluate(
 
         records.append(record)
 
-    return summarize(records, top_k, threshold)
+    import os
+    return summarize(records, top_k, threshold, mode=os.environ.get("RAG_RETRIEVAL_MODE", "hybrid"))
 
 
 def _mean(values: list[float]) -> float:
     return sum(values) / len(values) if values else 0.0
 
 
-def summarize(records: list[dict[str, Any]], top_k: int, threshold: float) -> dict[str, Any]:
+def summarize(records: list[dict[str, Any]], top_k: int, threshold: float, mode: str = "hybrid") -> dict[str, Any]:
     answerable = [r for r in records if r["type"] in ANSWERABLE_TYPES]
     irrelevant = [r for r in records if r["type"] == "irrelevant"]
 
@@ -187,6 +188,7 @@ def summarize(records: list[dict[str, Any]], top_k: int, threshold: float) -> di
     return {
         "top_k": top_k,
         "threshold": threshold,
+        "mode": mode,
         "counts": {
             "total": total,
             "answerable": len(answerable),
@@ -235,11 +237,16 @@ def render_report(summaries: list[dict[str, Any]], with_detail: bool) -> str:
 
     lines.append("## 检索质量对比")
     lines.append("")
-    lines.append("| top_k | 阈值 | hit@1 | hit@3 | 章节命中率 | 无关拒答率 | 误拒率 | 拒答准确率 |")
-    lines.append("|---|---|---|---|---|---|---|---|")
+    lines.append("| 检索模式 | top_k | 阈值 | hit@1 | hit@3 | 章节命中率 | 无关拒答率 | 误拒率 | 拒答准确率 |")
+    lines.append("|---|---|---|---|---|---|---|---|---|")
     for summary in summaries:
+        mode_label = {
+            "dense": "仅向量 (dense)",
+            "bm25": "仅文本 (bm25)",
+            "hybrid": "混合检索 (hybrid)"
+        }.get(summary.get("mode", "hybrid"), summary.get("mode", "hybrid"))
         lines.append(
-            f"| {summary['top_k']} | {summary['threshold']:.3f} | "
+            f"| {mode_label} | {summary['top_k']} | {summary['threshold']:.3f} | "
             f"{_pct(summary['hit@1'])} | {_pct(summary['hit@3'])} | "
             f"{_pct(summary['section_hit_rate'])} | {_pct(summary['irrelevant_refusal_rate'])} | "
             f"{_pct(summary['answerable_false_refusal_rate'])} | {_pct(summary['refusal_accuracy'])} |"
@@ -251,11 +258,16 @@ def render_report(summaries: list[dict[str, Any]], with_detail: bool) -> str:
     lines.append("| 配置 | 可回答(min/中位/max) | 无关(min/中位/max) |")
     lines.append("|---|---|---|")
     for summary in summaries:
+        mode_label = {
+            "dense": "dense",
+            "bm25": "bm25",
+            "hybrid": "hybrid"
+        }.get(summary.get("mode", "hybrid"), summary.get("mode", "hybrid"))
         ans = summary["answerable_distance"]
         irr = summary["irrelevant_distance"]
         ans_text = f"{ans['min']:.3f} / {ans['median']:.3f} / {ans['max']:.3f}" if ans else "-"
         irr_text = f"{irr['min']:.3f} / {irr['median']:.3f} / {irr['max']:.3f}" if irr else "-"
-        lines.append(f"| top_k={summary['top_k']} | {ans_text} | {irr_text} |")
+        lines.append(f"| {mode_label} (top_k={summary['top_k']}) | {ans_text} | {irr_text} |")
     lines.append("")
     lines.append(
         "> 标定建议：理想阈值应落在“可回答问题最佳距离的 max”与“无关问题最佳距离的 min”之间。"
@@ -297,6 +309,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--report", type=Path, default=DEFAULT_REPORT)
     parser.add_argument("--top-k", type=int, default=None, help="单次评测的 top_k；默认取 settings")
     parser.add_argument("--compare-top-k", type=str, default=None, help='逗号分隔的 top_k 列表，如 "1,3,5,8"')
+    parser.add_argument("--compare-mode", action="store_true", help="对 dense, bm25, hybrid 检索模式进行对比")
     parser.add_argument("--threshold", type=float, default=None, help="拒答距离阈值；默认取 settings")
     parser.add_argument("--generate", action="store_true", help="评测生成质量（需 DeepSeek Key）")
     parser.add_argument("--judge", action="store_true", help="LLM-as-judge 忠实度打分（需配合 --generate）")
@@ -307,6 +320,13 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     threshold = args.threshold if args.threshold is not None else settings.get_similarity_distance_threshold()
+
+    import os
+
+    if args.compare_mode:
+        modes = ["dense", "bm25", "hybrid"]
+    else:
+        modes = [settings.get_retrieval_mode()]
 
     if args.compare_top_k:
         top_k_list = [int(value) for value in args.compare_top_k.split(",") if value.strip()]
@@ -320,30 +340,40 @@ def main() -> None:
             raise SystemExit("--generate 需要 DeepSeek API Key（环境变量 DEEPSEEK_API_KEY 或 .rag_config.json）。")
 
     questions = load_questions(args.questions)
-    print(f"加载 {len(questions)} 道题，top_k 配置：{top_k_list}，阈值：{threshold}")
+    print(f"加载 {len(questions)} 道题，模式配置：{modes}，top_k 配置：{top_k_list}，阈值：{threshold}")
 
     embedding_model, collection = load_retriever()
 
+    orig_mode = os.environ.get("RAG_RETRIEVAL_MODE")
     summaries = []
-    for top_k in top_k_list:
-        print(f"评测 top_k={top_k} ...")
-        summary = evaluate(
-            questions,
-            embedding_model,
-            collection,
-            top_k=top_k,
-            threshold=threshold,
-            generate=args.generate,
-            judge=args.judge,
-            api_key=api_key,
-            model=args.model,
-        )
-        summaries.append(summary)
-        print(
-            f"  hit@1={_pct(summary['hit@1'])} hit@3={_pct(summary['hit@3'])} "
-            f"无关拒答率={_pct(summary['irrelevant_refusal_rate'])} "
-            f"拒答准确率={_pct(summary['refusal_accuracy'])}"
-        )
+
+    try:
+        for mode in modes:
+            os.environ["RAG_RETRIEVAL_MODE"] = mode
+            for top_k in top_k_list:
+                print(f"评测 模式={mode}, top_k={top_k} ...")
+                summary = evaluate(
+                    questions,
+                    embedding_model,
+                    collection,
+                    top_k=top_k,
+                    threshold=threshold,
+                    generate=args.generate,
+                    judge=args.judge,
+                    api_key=api_key,
+                    model=args.model,
+                )
+                summaries.append(summary)
+                print(
+                    f"  hit@1={_pct(summary['hit@1'])} hit@3={_pct(summary['hit@3'])} "
+                    f"无关拒答率={_pct(summary['irrelevant_refusal_rate'])} "
+                    f"拒答准确率={_pct(summary['refusal_accuracy'])}"
+                )
+    finally:
+        if orig_mode is not None:
+            os.environ["RAG_RETRIEVAL_MODE"] = orig_mode
+        elif "RAG_RETRIEVAL_MODE" in os.environ:
+            del os.environ["RAG_RETRIEVAL_MODE"]
 
     report = render_report(summaries, with_detail=True)
     args.report.write_text(report, encoding="utf-8")
